@@ -76,6 +76,16 @@ endfunction
 
 " Maps {{{1
 
+function! EndwiseDiscretionary()
+  let g:EndwiseReplacement = <SID>crend(0)
+  call feedkeys(":normal! i\<C-R>=g:EndwiseReplacement\<CR>\<Esc>")
+endfunction
+
+function! EndwiseAlways()
+  let g:EndwiseReplacement = <SID>crend(1)
+  call feedkeys(":normal! i\<C-R>=g:EndwiseReplacement\<CR>\<Esc>")
+endfunction
+
 if maparg("<Plug>DiscretionaryEnd") == ""
   inoremap <silent> <SID>DiscretionaryEnd <C-R>=<SID>crend(0)<CR>
   inoremap <silent> <SID>AlwaysEnd        <C-R>=<SID>crend(1)<CR>
