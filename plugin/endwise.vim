@@ -77,24 +77,22 @@ endfunction
 " Maps {{{1
 
 function! EndwiseDiscretionary()
-  let g:EndwiseReplacement = <SID>crend(0)
-  call feedkeys(":normal! i\<C-R>=g:EndwiseReplacement\<CR>\<Esc>")
+  return <SID>Endwise(0, 0)
 endfunction
 
 function! EndwiseAlways()
-  let g:EndwiseReplacement = <SID>crend(1)
-  call feedkeys(":normal! i\<C-R>=g:EndwiseReplacement\<CR>\<Esc>")
+  return <SID>Endwise(1, 0)
 endfunction
 
 if maparg("<Plug>DiscretionaryEnd") == ""
-  inoremap <silent> <SID>DiscretionaryEnd <C-R>=<SID>crend(0)<CR>
-  inoremap <silent> <SID>AlwaysEnd        <C-R>=<SID>crend(1)<CR>
-  imap    <script> <Plug>DiscretionaryEnd <SID>DiscretionaryEnd
-  imap    <script> <Plug>AlwaysEnd        <SID>AlwaysEnd
+  inoremap <silent> <SID>DiscretionaryEnd  <C-R>=<SID>Endwise(0, 1)<CR>
+  inoremap <silent> <SID>AlwaysEnd         <C-R>=<SID>Endwise(1, 1)<CR>
+  imap     <script> <Plug>DiscretionaryEnd <SID>DiscretionaryEnd
+  imap     <script> <Plug>AlwaysEnd        <SID>AlwaysEnd
 endif
 
 if !exists('g:endwise_no_mappings')
-  if maparg('<CR>','i') =~# '<C-R>=.*crend(.)<CR>\|<\%(Plug\|SNR\|SID\)>.*End'
+  if maparg('<CR>','i') =~# '<C-R>=.*Endwise(.)<CR>\|<\%(Plug\|SNR\|SID\)>.*End'
     " Already mapped
   elseif maparg('<CR>','i') =~ '<CR>'
     exe "imap <script> <C-X><CR> ".maparg('<CR>','i')."<SID>AlwaysEnd"
@@ -112,58 +110,89 @@ endif
 
 " Code {{{1
 
-function! s:mysearchpair(beginpat,endpat,synpat)
+function! s:mysearchpair(BeginPattern,EndPattern,SyntaxPattern)
   let g:endwise_syntaxes = ""
   let s:lastline = line('.')
   call s:synname()
-  let line = searchpair(a:beginpat,'',a:endpat,'Wn','<SID>synname() !~# "^'.substitute(a:synpat,'\\','\\\\','g').'$"',line('.')+50)
+  let line = searchpair(a:BeginPattern,'',a:EndPattern,'Wn','<SID>synname() !~# "^'.substitute(a:SyntaxPattern,'\\','\\\\','g').'$"',line('.')+50)
   return line
 endfunction
 
-function! s:crend(always)
-  let n = ""
+function! s:Endwise(always, interactive)
+
+  let OnFailure = ''
+  let OnSuccess = ''
+
   if !exists("b:endwise_addition") || !exists("b:endwise_words") || !exists("b:endwise_syngroups")
-    return n
+    return OnFailure
   end
-  let synpat  = '\%('.substitute(b:endwise_syngroups,',','\\|','g').'\)'
-  let wordchoice = '\%('.substitute(b:endwise_words,',','\\|','g').'\)'
+
+  let SyntaxPattern  = '\%(' . substitute(b:endwise_syngroups, ',', '\\|', 'g') . '\)'
+  let WordChoice = '\%(' . substitute(b:endwise_words, ',', '\\|', 'g') . '\)'
+
   if exists("b:endwise_pattern")
-    let beginpat = substitute(b:endwise_pattern,'&',substitute(wordchoice,'\\','\\&','g'),'g')
+    let BeginPattern = substitute(b:endwise_pattern, '&', substitute(WordChoice, '\\', '\\&', 'g'), 'g')
   else
-    let beginpat = '\<'.wordchoice.'\>'
+    let BeginPattern = '\<' . WordChoice . '\>'
   endif
-  let lnum = line('.') - 1
-  let space = matchstr(getline(lnum),'^\s*')
-  let col  = match(getline(lnum),beginpat) + 1
-  let word  = matchstr(getline(lnum),beginpat)
-  let endword = substitute(word,'.*',b:endwise_addition,'')
-  let y = n.endword."\<C-O>O"
+
+  " In interactive contexts, we need to look at the previous line.
+  " This is because this function would get called after the insertion
+  " of <CR>.
+  let LineNumber = line('.') - a:interactive
+  let Line = getline(LineNumber)
+
+  let Indent  = matchstr(Line, '^\s*')
+  let Column  = match(Line, BeginPattern) + 1
+  let Word    = matchstr(Line, BeginPattern)
+  let EndWord = substitute(Word, '.*', b:endwise_addition, '')
+
+  let OnSuccess = OnFailure . EndWord
+
+  " For interactive use, we want to exit insert mode and then
+  " plonk a newline in.
+  if a:interactive
+    let OnSuccess .= "\<C-O>O"
+  endif
+
   if b:endwise_addition[0:1] ==# '\='
-    let endpat = '\w\@<!'.endword.'\w\@!'
+    let EndPattern = '\w\@<!' . EndWord . '\w\@!'
   else
-    let endpat = '\w\@<!'.substitute('\w\+', '.*', b:endwise_addition, '').'\w\@!'
+    let EndPattern = '\w\@<!' . substitute('\w\+', '.*', b:endwise_addition, '') . '\w\@!'
   endif
+
+  " Don't do lookarounds if 'always' is truthy
   if a:always
-    return y
-  elseif col <= 0 || synIDattr(synID(lnum,col,1),'name') !~ '^'.synpat.'$'
-    return n
-  elseif getline('.') !~ '^\s*#\=$'
-    return n
+    return OnSuccess
   endif
-  let line = s:mysearchpair(beginpat,endpat,synpat)
-  " even is false if no end was found, or if the end found was less
-  " indented than the current line
-  let even = strlen(matchstr(getline(line),'^\s*')) >= strlen(space)
-  if line == 0
-    let even = 0
+
+  if Column <= 0
+    return OnFailure
   endif
-  if !even && line == line('.') + 1
-    return y
+
+  let SyntaxID = synIDattr(synID(LineNumber, Column, 1), 'name')
+  if SyntaxID !~ '^' . SyntaxPattern . '$'
+    return OnFailure
   endif
-  if even
-    return n
+
+  let PairedRow = s:mysearchpair(BeginPattern, EndPattern, SyntaxPattern)
+  let PairedLine = getline(PairedRow)
+
+  let NeedsIndent = strlen(matchstr(PairedLine, '^\s*')) < strlen(Indent)
+  if PairedRow == 0
+    let NeedsIndent = 1
   endif
-  return y
+
+  if NeedsIndent && PairedRow == line('.') + a:interactive
+    return OnSuccess
+  endif
+
+  if !NeedsIndent
+    return OnFailure
+  endif
+
+  return OnSuccess
+
 endfunction
 
 function! s:synname()
